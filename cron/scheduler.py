@@ -2074,12 +2074,7 @@ def _run_agent_with_watchdog(
 def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgent) -> str:
     """Deliverable final response from a ``run_conversation`` result. Raises RuntimeError on
     `failed=True`/`completed=False`: the error text may sit in `final_response` and would otherwise
-    be delivered as the reply with the job marked ok."""
-    # If the agent itself reported failure (e.g. all retries exhausted on API errors, model abort, mid-run
-    # interrupt), do not silently mark the job as successful. run_agent populates
-    # `failed=True`/`completed=False` on these paths and may put the error into `final_response`, which
-    # would otherwise be delivered as if it were the agent's reply and the job's `last_status` set to "ok".
-    # Raise so the except handler below builds the proper failure tuple. (issue #17855)
+    be delivered as the reply with the job marked ok (issue #17855)."""
     turn_exit_reason = str(result.get("turn_exit_reason") or "")
     final_response_text = (result.get("final_response") or "").strip()
     max_iteration_summary = is_max_iteration_handoff(result)
@@ -2628,6 +2623,11 @@ def run_job(
         result = _run_agent_with_watchdog(
             agent, prompt, job, job_id, job_name, scope.task_id, cancel_event,
             worker_state=_worker_state)
+        # Preserve the transport verdict before the RuntimeError drops the exception chain.
+        if (result.get("failure_reason") == "timeout" and result.get("failure_retryable") is True
+                and (result.get("failed") is True or result.get("completed") is False)
+                and int(getattr(agent, "session_api_calls", 0) or 0) == 0):
+            job["_model_unreachable"] = True
         final_response = _final_response_from_result(result, job_id, job_name, AIAgent)
         if (setup.fallback_notice and final_response.strip() and not _is_cron_silence_response(final_response)
                 and _cron_failure_marker_error(final_response) is None):
